@@ -1,90 +1,110 @@
 # Google Cloud Console Setup
 
-If you want to view job runs in Google Cloud Console, use **Cloud Run Jobs** plus **Cloud Scheduler**.
+This project should run in Kevin's Google Cloud project, not from GitHub Actions and not from a local machine.
 
-## Why this setup
-- Cloud Run Jobs lets you view executions in the Cloud Run console.
-- Cloud Run sends container logs to Cloud Logging automatically.
-- Cloud Scheduler can trigger the job every morning.
+## Runtime architecture
 
-## 1) Build and deploy the Cloud Run Job
-Requirements:
-- Google Cloud project
-- gcloud CLI installed and authenticated
-- Billing enabled for the project
-- Cloud Run API, Cloud Build API, Artifact Registry API, and Cloud Scheduler API enabled
+- Cloud Run Jobs runs `monitor.py`.
+- Cloud Scheduler triggers the job every morning.
+- Secret Manager stores the Postmaster OAuth and SMTP values.
+- Cloud Storage stores the previous-run state JSON so change detection survives between Cloud Run executions.
+- Cloud Logging stores execution logs and Python errors.
 
-Run:
+## What Kevin must provide
+
+Deployment access:
+- Google Cloud project ID
+- Region, for example `asia-south1` or `us-central1`
+- Schedule and timezone, for example `0 9 * * *` and `Asia/Kolkata`
+- Permission for the deployer to create Cloud Run Jobs, Cloud Scheduler jobs, service accounts, secrets, IAM bindings, Cloud Build builds, and Cloud Storage buckets
+- Billing enabled on the Google Cloud project
+
+Google Postmaster access:
+- Google account with access to the domains in Google Postmaster Tools
+- OAuth client ID
+- OAuth client secret
+- OAuth refresh token for the Postmaster API
+- Domains to monitor, comma-separated
+- DKIM selectors to check, comma-separated
+
+Email sending:
+- Sender email address
+- SMTP username
+- SMTP password or app password
+- SMTP host
+- SMTP port
+- Recipient emails, comma-separated
+
+## Prepare the env file
+
+Create a local `.env` file from `.env.example` and fill it with Kevin's values:
 
 ```bash
-chmod +x deploy-cloud-run-job.sh
-./deploy-cloud-run-job.sh YOUR_PROJECT_ID YOUR_REGION postmaster-monitor
+cp .env.example .env
 ```
 
 Example:
 
-```bash
-./deploy-cloud-run-job.sh my-gcp-project asia-south1 postmaster-monitor
+```text
+POSTMASTER_CLIENT_ID=...
+POSTMASTER_CLIENT_SECRET=...
+POSTMASTER_REFRESH_TOKEN=...
+POSTMASTER_SENDER_EMAIL=sender@example.com
+POSTMASTER_SMTP_USERNAME=sender@example.com
+POSTMASTER_SMTP_PASSWORD=...
+POSTMASTER_RECIPIENTS=manager@example.com,team@example.com
+POSTMASTER_DOMAINS=example.com,example.org
+POSTMASTER_DKIM_SELECTORS=default,google,k1
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=465
+POSTMASTER_STATE_GCS_URI=gs://YOUR_PROJECT_ID-postmaster-monitor-state/state.json
 ```
 
-## 2) Add environment variables and secrets to the job
-In Google Cloud Console:
-1. Open **Cloud Run**
-2. Open the **Jobs** tab
-3. Click `postmaster-monitor`
-4. Click **Edit and deploy new revision** or **Edit**
-5. Add environment variables matching `.env.example`
+Do not commit `.env`.
 
-Recommended values:
-- `POSTMASTER_CLIENT_ID`
-- `POSTMASTER_CLIENT_SECRET`
-- `POSTMASTER_REFRESH_TOKEN`
-- `POSTMASTER_SENDER_EMAIL`
-- `POSTMASTER_SMTP_USERNAME`
-- `POSTMASTER_SMTP_PASSWORD`
-- `POSTMASTER_RECIPIENTS`
-- `POSTMASTER_DOMAINS`
-- `POSTMASTER_DKIM_SELECTORS`
-- `SMTP_HOST`
-- `SMTP_PORT`
+## Deploy from Google Cloud Shell
 
-For better security, store sensitive values in **Secret Manager** and attach them as secrets to the job instead of plain environment variables.
+Open Cloud Shell in Kevin's Google Cloud project, clone the repo, and run:
 
-## 3) Run it once manually
-In Cloud Run console:
-1. Go to **Cloud Run**
-2. Open the job
-3. Click **Execute**
+```bash
+chmod +x deploy-cloud-run-job.sh
+./deploy-cloud-run-job.sh YOUR_PROJECT_ID YOUR_REGION postmaster-monitor .env '0 9 * * *' Asia/Kolkata
+```
 
-This lets you confirm the email works.
+The script will:
+- enable the required Google Cloud APIs
+- create runtime and scheduler service accounts
+- create or update Secret Manager secrets from `.env`
+- create the Cloud Storage state bucket if needed
+- build the container image
+- deploy the Cloud Run Job
+- grant the scheduler service account Cloud Run Invoker on the job
+- create or update the Cloud Scheduler daily trigger
 
-## 4) View runs in Google Cloud Console
-You can view:
-- Job executions in **Cloud Run -> Jobs -> postmaster-monitor**
-- Logs in the **LOGS** tab for the job or a specific execution
-- Full logs in **Cloud Logging -> Logs Explorer**
+## Manual smoke test
 
-## 5) Create a scheduler job
-Use Cloud Scheduler to trigger it every morning.
+After deployment, run one manual execution from Cloud Shell:
 
-### Simplest method from the console
-1. Open **Cloud Scheduler**
-2. Click **Create job**
-3. Name: `postmaster-monitor-daily`
-4. Schedule: for example `0 9 * * *`
-5. Choose your timezone
-6. Target type: **HTTP**
+```bash
+gcloud run jobs execute postmaster-monitor \
+  --project YOUR_PROJECT_ID \
+  --region YOUR_REGION \
+  --wait
+```
 
-Then configure the target to invoke the Cloud Run Job execution endpoint through an authenticated call, or use a lightweight Cloud Run service wrapper if you prefer an HTTP endpoint.
+Then confirm:
+- the job completed successfully in Cloud Run Jobs
+- the email arrived
+- the recipient list is correct
+- the domain list and DKIM selector list are correct
+- the state file exists in the configured Cloud Storage path
 
-## 6) Easier alternative if you want a direct HTTP scheduler target
-If you do not want to call the Cloud Run Jobs execution API, you can instead deploy this as a **Cloud Run service** and have Cloud Scheduler hit its URL daily.
-That setup is easier to schedule, but Cloud Run Jobs is cleaner for batch work and gives you execution history directly in the Cloud Run jobs UI.
+## Where to monitor it
 
-## 7) What you will see in the console
-- Whether the job ran successfully
-- Each execution time
-- Container logs and Python errors
-- Job configuration
+- Cloud Run -> Jobs -> `postmaster-monitor` for executions
+- Cloud Scheduler -> `postmaster-monitor-daily` for the daily trigger
+- Cloud Logging for logs and Python errors
+- Secret Manager for config values
+- Cloud Storage for the state file
 
-That is the cleanest way to make this visible in Google Cloud Console instead of only inside GitHub Actions.
+GitHub Actions is not part of the production runtime.

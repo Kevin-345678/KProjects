@@ -15,13 +15,13 @@ Google documents the **Open in Cloud Shell** feature for GitHub repositories and
 Use this link:
 
 ```text
-https://shell.cloud.google.com/cloudshell/editor?cloudshell_git_repo=https://github.com/Sid3548/KProjects.git&cloudshell_open_in_editor=SETUP_GCP.md&cloudshell_print=HANDOFF.md&cloudshell_workspace=.&show=ide%2Cterminal&ephemeral=true
+https://shell.cloud.google.com/cloudshell/editor?cloudshell_git_repo=https://github.com/Sid3548/KProjects.git&cloudshell_open_in_editor=SETUP_GCP.md&cloudshell_print=HANDOFF_KEVIN_GCP_ONLY.md&cloudshell_workspace=.&show=ide%2Cterminal&ephemeral=true
 ```
 
 Or use this markdown button in docs:
 
 ```md
-[![Open in Cloud Shell](https://gstatic.com/cloudssh/images/open-btn.svg)](https://shell.cloud.google.com/cloudshell/editor?cloudshell_git_repo=https://github.com/Sid3548/KProjects.git&cloudshell_open_in_editor=SETUP_GCP.md&cloudshell_print=HANDOFF.md&cloudshell_workspace=.&show=ide%2Cterminal&ephemeral=true)
+[![Open in Cloud Shell](https://gstatic.com/cloudssh/images/open-btn.svg)](https://shell.cloud.google.com/cloudshell/editor?cloudshell_git_repo=https://github.com/Sid3548/KProjects.git&cloudshell_open_in_editor=SETUP_GCP.md&cloudshell_print=HANDOFF_KEVIN_GCP_ONLY.md&cloudshell_workspace=.&show=ide%2Cterminal&ephemeral=true)
 ```
 
 ## What Kevin still needs to provide

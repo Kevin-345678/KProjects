@@ -3,7 +3,8 @@ name: Daily Postmaster Report
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 3 * * *'
+    # 9:00 AM Asia/Kolkata
+    - cron: '30 3 * * *'
 
 permissions:
   contents: write
@@ -32,8 +33,6 @@ jobs:
           POSTMASTER_SMTP_USERNAME: ${{ secrets.POSTMASTER_SMTP_USERNAME }}
           POSTMASTER_SMTP_PASSWORD: ${{ secrets.POSTMASTER_SMTP_PASSWORD }}
           POSTMASTER_RECIPIENTS: ${{ secrets.POSTMASTER_RECIPIENTS }}
-          POSTMASTER_DOMAINS: ${{ secrets.POSTMASTER_DOMAINS }}
-          POSTMASTER_DKIM_SELECTORS: ${{ secrets.POSTMASTER_DKIM_SELECTORS }}
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
         run: python monitor.py

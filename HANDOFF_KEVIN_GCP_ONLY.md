@@ -124,6 +124,7 @@ You must have the following values ready:
 ## Monitoring settings
 - `POSTMASTER_DOMAINS`
 - `POSTMASTER_DKIM_SELECTORS`
+- `POSTMASTER_STATE_GCS_URI`
 
 ## Example values
 ```text
@@ -132,6 +133,7 @@ POSTMASTER_DKIM_SELECTORS=default,google,k1
 POSTMASTER_RECIPIENTS=manager@company.com,deliverability@company.com
 SMTP_HOST=smtp.gmail.com
 SMTP_PORT=465
+POSTMASTER_STATE_GCS_URI=gs://your-project-postmaster-monitor-state/state.json
 ```
 
 ---
@@ -413,22 +415,21 @@ Choose the correct timezone for the business.
 ---
 
 ## Step 14 - Configure the scheduler target
-There are two possible approaches.
+Use Cloud Scheduler to call the Cloud Run Jobs execution API with OAuth authentication.
 
-## Recommended approach for simplicity
-Use a small HTTP-triggered wrapper service if your team prefers the simplest scheduler wiring.
+The deployment script in this repo creates or updates the scheduler job automatically:
 
-## Direct approach
-If you are using the Cloud Run Job directly, configure Cloud Scheduler to call the Cloud Run Jobs execution API with proper authentication.
+```bash
+./deploy-cloud-run-job.sh YOUR_PROJECT_ID YOUR_REGION postmaster-monitor .env '0 9 * * *' Asia/Kolkata
+```
 
-If your team wants the cleanest operator experience, use Cloud Scheduler plus a Cloud Run trigger path already approved in your cloud setup.
+The scheduler target is:
 
-If needed, the deployment can later be adjusted so Cloud Scheduler hits a small Cloud Run service endpoint that starts the job.
+```text
+https://run.googleapis.com/v2/projects/YOUR_PROJECT_ID/locations/YOUR_REGION/jobs/postmaster-monitor:run
+```
 
-For the current handoff, the main point is:
-- the monitoring logic runs in Cloud Run
-- scheduling is handled by Cloud Scheduler
-- logs and executions remain visible in Google Cloud Console
+The scheduler uses its own service account and needs the Cloud Run Invoker role on the Cloud Run Job.
 
 ---
 
@@ -456,14 +457,9 @@ Or:
 # 8. Operational notes
 
 ## 8.1 State tracking
-The project currently includes file-based state handling in the repository version.
+The Cloud Run setup stores long-term state in Cloud Storage through `POSTMASTER_STATE_GCS_URI`.
 
-For a fully production-grade Cloud Run setup, long-term change tracking should later be stored in a persistent cloud store such as:
-- Cloud Storage
-- Firestore
-- BigQuery
-
-This is because Cloud Run containers do not keep local files between executions.
+This is required because Cloud Run containers do not keep local files between executions. Without Cloud Storage, the job can still send mail, but previous-run change detection will not be reliable.
 
 ## 8.2 DKIM selectors
 Make sure the selector list is correct.
@@ -492,11 +488,13 @@ Before considering the deployment complete, confirm all of the following:
 - Artifact Registry API enabled
 - Cloud Scheduler API enabled
 - Secret Manager API enabled
+- Cloud Storage API enabled
 - ZIP uploaded and unzipped in Cloud Shell
 - container image built successfully
 - Cloud Run job deployed successfully
 - all secrets created in Secret Manager
 - all secrets mapped into the Cloud Run job
+- Cloud Storage state path configured
 - manual execution succeeded
 - report email received
 - domains and selectors verified

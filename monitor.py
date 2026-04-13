@@ -13,7 +13,10 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
 SCOPES = ["https://www.googleapis.com/auth/postmaster.readonly"]
-STATE_PATH = Path("state/state.json")
+DEFAULT_STATE_PATH = Path("state/state.json")
+DEFAULT_DOMAINS_PATH = Path("config/domains.txt")
+DEFAULT_DKIM_SELECTORS_PATH = Path("config/dkim_selectors.txt")
+DEFAULT_IPS_PATH = Path("config/ips.txt")
 TOKEN_URI = "https://oauth2.googleapis.com/token"
 
 
@@ -26,6 +29,71 @@ def env(name: str, default: str | None = None, required: bool = False) -> str:
 
 def parse_list(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def read_list_file(path: Path) -> list[str]:
+    if not path.exists():
+        return []
+
+    items: list[str] = []
+    for line in path.read_text().splitlines():
+        value = line.strip()
+        if not value or value.startswith("#"):
+            continue
+        items.append(value)
+    return items
+
+
+def configured_domains() -> list[str]:
+    domains = parse_list(env("POSTMASTER_DOMAINS"))
+    if domains:
+        return domains
+
+    domains_path = Path(env("POSTMASTER_DOMAINS_FILE", str(DEFAULT_DOMAINS_PATH)))
+    domains = read_list_file(domains_path)
+    if not domains:
+        raise RuntimeError(
+            "Add domains to POSTMASTER_DOMAINS or config/domains.txt"
+        )
+    return domains
+
+
+def configured_dkim_selectors() -> list[str]:
+    selectors = parse_list(env("POSTMASTER_DKIM_SELECTORS"))
+    if selectors:
+        return selectors
+
+    selectors_path = Path(
+        env("POSTMASTER_DKIM_SELECTORS_FILE", str(DEFAULT_DKIM_SELECTORS_PATH))
+    )
+    selectors = read_list_file(selectors_path)
+    return selectors or ["default", "google"]
+
+
+def configured_ips() -> list[str]:
+    ips = parse_list(env("POSTMASTER_IPS"))
+    if ips:
+        return ips
+
+    ips_path = Path(env("POSTMASTER_IPS_FILE", str(DEFAULT_IPS_PATH)))
+    return read_list_file(ips_path)
+
+
+def parse_gcs_uri(uri: str) -> tuple[str, str]:
+    if not uri.startswith("gs://"):
+        raise RuntimeError("POSTMASTER_STATE_GCS_URI must start with gs://")
+    bucket_name, _, blob_name = uri.removeprefix("gs://").partition("/")
+    if not bucket_name or not blob_name:
+        raise RuntimeError("POSTMASTER_STATE_GCS_URI must include a bucket and object path")
+    return bucket_name, blob_name
+
+
+def state_path() -> Path:
+    return Path(env("POSTMASTER_STATE_PATH", str(DEFAULT_STATE_PATH)))
+
+
+def state_gcs_uri() -> str:
+    return env("POSTMASTER_STATE_GCS_URI")
 
 
 def reputation_rank(value: str) -> int:
@@ -46,17 +114,45 @@ def changed_direction(previous: str, latest: str) -> str:
 
 
 def load_state() -> dict[str, Any]:
-    if not STATE_PATH.exists():
+    gcs_uri = state_gcs_uri()
+    if gcs_uri:
+        bucket_name, blob_name = parse_gcs_uri(gcs_uri)
+        from google.cloud import storage
+
+        blob = storage.Client().bucket(bucket_name).blob(blob_name)
+        if not blob.exists():
+            return {}
+        try:
+            contents = blob.download_as_text()
+            return json.loads(contents) if contents.strip() else {}
+        except json.JSONDecodeError:
+            return {}
+
+    path = state_path()
+    if not path.exists():
         return {}
     try:
-        return json.loads(STATE_PATH.read_text())
+        return json.loads(path.read_text())
     except json.JSONDecodeError:
         return {}
 
 
 def save_state(state: dict[str, Any]) -> None:
-    STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    STATE_PATH.write_text(json.dumps(state, indent=2, sort_keys=True))
+    contents = json.dumps(state, indent=2, sort_keys=True)
+    gcs_uri = state_gcs_uri()
+    if gcs_uri:
+        bucket_name, blob_name = parse_gcs_uri(gcs_uri)
+        from google.cloud import storage
+
+        storage.Client().bucket(bucket_name).blob(blob_name).upload_from_string(
+            contents,
+            content_type="application/json",
+        )
+        return
+
+    path = state_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(contents)
 
 
 def get_service():
@@ -123,6 +219,23 @@ def extract_ip_reputation(stat: dict[str, Any] | None) -> str:
         volume = item.get("ipCount") or len(sample_ips)
         parts.append(f"{reputation}: {volume}")
     return "; ".join(parts)
+
+
+def extract_monitored_ip_reputations(
+    stat: dict[str, Any] | None,
+    monitored_ips: list[str],
+) -> list[dict[str, str]]:
+    if not monitored_ips:
+        return []
+
+    monitored = set(monitored_ips)
+    matches: list[dict[str, str]] = []
+    for item in (stat or {}).get("ipReputations", []):
+        reputation = str(item.get("reputation", "UNKNOWN")).upper()
+        for ip in item.get("sampleIps", []):
+            if ip in monitored:
+                matches.append({"ip": ip, "reputation": reputation})
+    return matches
 
 
 def dns_txt_records(name: str) -> list[str]:
@@ -202,7 +315,13 @@ def summarize_alerts(current: dict[str, Any], previous: dict[str, Any] | None) -
     return alerts
 
 
-def build_domain_snapshot(service, domain: str, selectors: list[str], previous_state: dict[str, Any]) -> dict[str, Any]:
+def build_domain_snapshot(
+    service,
+    domain: str,
+    selectors: list[str],
+    monitored_ips: list[str],
+    previous_state: dict[str, Any],
+) -> dict[str, Any]:
     stats = fetch_domain_traffic(service, domain)
     current = latest_stat(stats)
     previous_stat = stats[-2] if len(stats) >= 2 else None
@@ -218,6 +337,7 @@ def build_domain_snapshot(service, domain: str, selectors: list[str], previous_s
         "previous_domain_reputation": extract_domain_reputation(previous_stat),
         "ip_reputation": extract_ip_reputation(current),
         "previous_ip_reputation": extract_ip_reputation(previous_stat),
+        "monitored_ip_reputations": extract_monitored_ip_reputations(current, monitored_ips),
         "spf_status": spf_status,
         "spf_detail": spf_detail,
         "dkim_status": dkim_status,
@@ -258,6 +378,18 @@ def render_email(report_date: str, snapshots: dict[str, dict[str, Any]]) -> str:
             "</tr>"
         )
 
+        monitored_ips = data.get("monitored_ip_reputations", [])
+        monitored_ips_html = ""
+        if monitored_ips:
+            monitored_ips_html = (
+                "<li><strong>Configured IP matches:</strong> "
+                + ", ".join(
+                    f"{html_escape(item['ip'])}: {html_escape(item['reputation'])}"
+                    for item in monitored_ips
+                )
+                + "</li>"
+            )
+
         details = (
             f"<h3>{html_escape(domain)}</h3>"
             f"<ul>"
@@ -266,6 +398,7 @@ def render_email(report_date: str, snapshots: dict[str, dict[str, Any]]) -> str:
             f"<li><strong>Previous domain reputation:</strong> {html_escape(data['previous_domain_reputation'])}</li>"
             f"<li><strong>IP reputation:</strong> {html_escape(data['ip_reputation'])}</li>"
             f"<li><strong>Previous IP reputation:</strong> {html_escape(data['previous_ip_reputation'])}</li>"
+            f"{monitored_ips_html}"
             f"<li><strong>SPF:</strong> {html_escape(data['spf_status'])} - {html_escape(data['spf_detail'])}</li>"
             f"<li><strong>DKIM:</strong> {html_escape(data['dkim_status'])} - {html_escape(data['dkim_detail'])}</li>"
             f"<li><strong>DMARC:</strong> {html_escape(data['dmarc_status'])} - {html_escape(data['dmarc_detail'])}</li>"
@@ -323,15 +456,22 @@ def send_email(html_body: str, subject: str) -> None:
 
 
 def main() -> None:
-    domains = parse_list(env("POSTMASTER_DOMAINS", required=True))
-    selectors = parse_list(env("POSTMASTER_DKIM_SELECTORS", "default,google"))
+    domains = configured_domains()
+    selectors = configured_dkim_selectors()
+    monitored_ips = configured_ips()
 
     service = get_service()
     previous_state = load_state()
     snapshots: dict[str, dict[str, Any]] = {}
 
     for domain in domains:
-        snapshots[domain] = build_domain_snapshot(service, domain, selectors, previous_state)
+        snapshots[domain] = build_domain_snapshot(
+            service,
+            domain,
+            selectors,
+            monitored_ips,
+            previous_state,
+        )
 
     report_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     subject = f"Daily Postmaster Summary - {report_date}"

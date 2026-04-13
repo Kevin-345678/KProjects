@@ -1,0 +1,4 @@
+# Add one DKIM selector per line.
+nce2048
+nc2048
+inb

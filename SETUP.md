@@ -1,52 +1,42 @@
-# Setup Guide
+# GitHub Actions Setup
 
-## 1) What this project does
-- Fetches Google Postmaster Tools data for your domains
-- Checks domain reputation
-- Checks IP reputation mix
-- Checks SPF, DKIM, and DMARC DNS records
-- Emails a daily HTML summary
-- Detects changes using the previous run stored in `state/state.json`
+This setup runs the scheduled mail job from Kevin's GitHub fork. It does not require a local machine to stay on.
 
-## 2) Required Google OAuth values
-You need these from Google Cloud Console:
-- OAuth Client ID
-- OAuth Client Secret
-- Refresh Token
+## 1. Configure monitored domains
 
-This project uses a refresh token because GitHub Actions cannot open a browser and complete interactive login.
+Edit `config/domains.txt` and add one Postmaster domain per line:
 
-## 3) Generate a refresh token once on your laptop
-Create a file named `get_refresh_token.py` with this content:
-
-```python
-from google_auth_oauthlib.flow import InstalledAppFlow
-
-SCOPES = ['https://www.googleapis.com/auth/postmaster.readonly']
-flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
-creds = flow.run_local_server(port=0)
-print('refresh_token:', creds.refresh_token)
+```text
+example.com
+example.org
 ```
 
-Install the required package:
+The report fetches domain reputation and IP reputation from Google Postmaster for each domain in that file.
 
-```bash
-pip install google-auth-oauthlib
+## 2. Configure DKIM selectors
+
+Edit `config/dkim_selectors.txt` and add one DKIM selector per line:
+
+```text
+nce2048
+nc2048
+inb
 ```
 
-Put your downloaded Google OAuth desktop-app `credentials.json` in the same folder and run:
+## 3. Configure monitored IPs
 
-```bash
-python get_refresh_token.py
-```
+Edit `config/ips.txt` and add one IP address per line.
 
-Copy the printed refresh token.
+Postmaster returns IP reputation data as part of each domain's traffic stats. The report highlights configured IPs when they appear in Postmaster's sampled IP reputation data.
 
-## 4) Add GitHub Actions secrets
-In your repo go to:
-**Settings -> Secrets and variables -> Actions**
+## 4. Add GitHub Actions secrets
 
-Add these repository secrets:
+In Kevin's fork, open:
+
+**Settings -> Secrets and variables -> Actions -> New repository secret**
+
+Add:
+
 - `POSTMASTER_CLIENT_ID`
 - `POSTMASTER_CLIENT_SECRET`
 - `POSTMASTER_REFRESH_TOKEN`
@@ -54,30 +44,27 @@ Add these repository secrets:
 - `POSTMASTER_SMTP_USERNAME`
 - `POSTMASTER_SMTP_PASSWORD`
 - `POSTMASTER_RECIPIENTS`
-- `POSTMASTER_DOMAINS`
-- `POSTMASTER_DKIM_SELECTORS`
 - `SMTP_HOST`
 - `SMTP_PORT`
 
-## 5) Example secret values
-- `POSTMASTER_RECIPIENTS`: `manager@company.com,ops@company.com`
-- `POSTMASTER_DOMAINS`: `example.com,example.org`
-- `POSTMASTER_DKIM_SELECTORS`: `default,google,k1`
-- `SMTP_HOST`: `smtp.gmail.com`
-- `SMTP_PORT`: `465`
+Do not commit these values into the repo.
 
-If you use Gmail SMTP, create a Gmail app password and use that as `POSTMASTER_SMTP_PASSWORD`.
+## 5. Run manually once
 
-## 6) Run it manually
-Open the **Actions** tab in GitHub.
-Open **Daily Postmaster Report**.
-Click **Run workflow**.
+Open **Actions -> Daily Postmaster Report -> Run workflow**.
 
-## 7) Schedule
-The workflow is currently set to run every day at `03:00 UTC`.
-Update `.github/workflows/postmaster-report.yml` if you want a different time.
+Confirm:
+- the workflow succeeds
+- the email arrives
+- the listed domains are correct
+- the IP reputation data appears in the report
 
-## 8) Notes
-- DKIM is checked against the selectors in `POSTMASTER_DKIM_SELECTORS`.
-- If a domain has no recent Postmaster data, the report may show `N/A`.
-- The workflow commits updated state back to the repository after each run.
+## 6. Schedule
+
+The workflow runs daily at 9:00 AM Asia/Kolkata:
+
+```yaml
+cron: '30 3 * * *'
+```
+
+GitHub Actions cron uses UTC.
